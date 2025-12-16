@@ -3,6 +3,17 @@ from django.contrib.auth.models import User
 
 # Create your models here.
 
+class Profile(models.Model):
+    ACCOUNT_TYPES = [
+        ('AP', 'Applicant'),
+        ('EM', 'Employer'),
+    ]
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    account_type = models.CharField(max_length=2, choices=ACCOUNT_TYPES, default='AP')
+
+    def __str__(self):
+        return f"{self.user.username} - {self.account_type}"
+
 class JobPosting(models.Model):
     title = models.CharField(max_length=100)
     company_name = models.CharField(max_length=100)
