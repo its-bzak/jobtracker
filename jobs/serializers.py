@@ -12,7 +12,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Application
         fields = ['id', 'applicant', 'job', 'application_date', 'status']
-        read_only_fields = ['id', 'applicant', 'status', 'application_date']
+        read_only_fields = ['id', 'applicant', 'job', 'application_date', 'status']
 
     def validate(self, data):
         request = self.context.get("request")
