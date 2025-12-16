@@ -49,7 +49,7 @@ class ApplicationViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to submit this application.")
 
         # only allow submit once
-        if application.status != "draft":
+        if application.status != "DR":
             return Response(
                 {"detail": "Only draft applications can be submitted."},
                 status=http_status.HTTP_400_BAD_REQUEST
@@ -59,7 +59,7 @@ class ApplicationViewSet(viewsets.ModelViewSet):
 
         # To Do: Add required fields here (resume, cover letter, etc.)
 
-        application.status = "applied" # mark as applied
+        application.status = "AP" # mark as applied
         application.save(update_fields=["status"]) # only update status field
 
         return Response(
