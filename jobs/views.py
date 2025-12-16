@@ -68,7 +68,7 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         )
 
 
-
+# Ownership checks are commented out for now to facilitate testing, add back after creating employer user type
 class InterviewViewSet(viewsets.ModelViewSet):
     serializer_class = InterviewSerializer
     permission_classes = [IsAuthenticated]
@@ -78,3 +78,40 @@ class InterviewViewSet(viewsets.ModelViewSet):
         return Interview.objects.filter(
             Q(application__applicant=user)
         ).distinct()
+
+    def perform_create(self, serializer):
+        application = serializer.validated_data.get("application")
+
+        """ ADD OWNERSHIP CHECK BACK LATER
+        if application.applicant != self.request.user:
+            raise PermissionDenied("You do not have permission to add an interview for this application.")
+        """
+        if application.status != "AP":
+            raise PermissionDenied("You can only add an interview for an application that has been submitted.")
+        application.status = "IN"
+        application.save(update_fields=["status"])
+        serializer.save()
+
+    def perform_update(self, serializer):
+        interview = self.get_object()
+
+        """ ADD OWNERSHIP CHECK BACK LATER
+        if interview.application.applicant != self.request.user:
+            raise PermissionDenied("You do not have permission to edit this interview.")
+        """
+        if interview.application.status != "IN":
+            raise PermissionDenied("You can only update an interview for an application that is in interview stage.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+
+        """ ADD OWNERSHIP CHECK BACK LATER
+        if instance.application.applicant != self.request.user:
+            raise PermissionDenied("You do not have permission to delete this interview.")
+        """
+        application = instance.application
+        instance.delete()
+        # If no more interviews exist for this application, revert status back to AP
+        if not Interview.objects.filter(application=application).exists():
+            application.status = "AP"
+            application.save(update_fields=["status"])
