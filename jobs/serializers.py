@@ -19,18 +19,21 @@ class ApplicationSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
 
         job = data.get("job") or getattr(self.instance, "job", None)
-        applicant = data.get("applicant") or getattr(self.instance, "applicant", None) or user
-
         applicant = user
 
         qs = Application.objects.filter(applicant=applicant, job=job)
 
         if self.instance is not None:
             qs = qs.exclude(pk=self.instance.pk) # Exclude the current instance when updating
-            if qs.exists():
-                raise serializers.ValidationError("You have already applied for this job.")
+        if qs.exists():
+            raise serializers.ValidationError("You have already applied for this job.")
 
         return data
+    
+    def create(self, validated_data):
+        request = self.context.get("request")
+        validated_data['applicant'] = request.user
+        return super().create(validated_data)
     
 class InterviewSerializer(serializers.ModelSerializer):
 
@@ -40,8 +43,10 @@ class InterviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
     def allowCreateOnlyForAuthorizedUsers(self, application, user):
-        if application.job.company != user.profile.company: # Only employers associated with the job's company can create interviews
+        company = getattr(getattr(user, "profile", None), "company", None)
+        if application.job.company != company or company is None: # Only employers associated with the job's company can create interviews
             raise serializers.ValidationError("You do not have permission to create an interview for this application.")
+        
     def validate(self, data): # Ensure only one interview per application
         request = self.context.get("request")
         user = getattr(request, "user", None)
