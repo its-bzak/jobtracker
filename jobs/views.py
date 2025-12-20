@@ -4,8 +4,8 @@ from rest_framework import status as http_status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
-from django.db.models import Q
-from .models import Profile, Company, JobPosting, Application, Interview
+from django.core.exceptions import ValidationError
+from .models import Profile, JobPosting, Application, Interview
 from .serializers import (JobPostingSerializer, ApplicationSerializer, InterviewSerializer)
 from django.db import transaction
 
@@ -30,7 +30,7 @@ class ApplicationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.request.user.profile.account_type == Profile.ACCOUNT_EMPLOYER:
             # Employers can see all submitted applications for their company's job postings
-            return Application.objects.filter(job__company=self.request.user.profile.company, status__in=["AP", "IN"])
+            return Application.objects.filter(job__company=self.request.user.profile.company, status__in=["AP", "IN", "RE", "OF"])
         return Application.objects.filter(applicant=self.request.user)
 
     def perform_create(self, serializer):
@@ -40,7 +40,7 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         application = self.get_object()
         if application.applicant != self.request.user:
             raise PermissionDenied("You do not have permission to edit this application.")
-        if application.status != "DR":
+        if application.status != Application.DR: # Only allow editing draft applications
             raise PermissionDenied("You can only edit draft applications.")
         serializer.save()
 
@@ -76,7 +76,7 @@ class ApplicationViewSet(viewsets.ModelViewSet):
             status=http_status.HTTP_200_OK
         )
     
-    @action(detail=True, methods=["put"]) # Custom action to withdraw an application
+    @action(detail=True, methods=["post"]) # Custom action to withdraw an application
     def withdraw(self, request, pk=None):
         application = self.get_object()
 
@@ -104,18 +104,33 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         app = self.get_object()
         if app.job.company != request.user.profile.company or request.user.profile.company is None:
             raise PermissionDenied("No permission.")
-        app.transition_status(Application.OF)
-        return Response({"id": app.id, "status": app.status})
+        try:
+            app.transition_status(Application.OF) # try to mark as offered from applied
+        except ValidationError as e: # catch any validation errors
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST) # return error message and status code
+        
+        return Response({"id": app.id, "status": app.status}) # return updated application status
     
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         app = self.get_object()
+        try:
+            app.transition_status(Application.RE) # try to mark as rejected from applied
+        except ValidationError as e: # catch any validation errors
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST) # return error message and status code
+        return Response({"id": app.id, "status": app.status}) # return updated application status
+    
+    @action(detail=True, methods=["post"])
+    def promote_to_interview(self, request, pk=None):
+        app = self.get_object()
         if app.job.company != request.user.profile.company or request.user.profile.company is None:
-            raise PermissionDenied("No permission.")
-        app.transition_status(Application.RE)
-        return Response({"id": app.id, "status": app.status})
-    
-    
+            raise PermissionDenied("You do not have permission to promote this application.")
+        try:
+            app.transition_status(Application.IN) # mark as in interview from applied
+        except ValidationError as e:
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST)
+        
+        return Response({"id": app.id, "status": app.status}, status=http_status.HTTP_200_OK)
 
 # Ownership checks are commented out for now to facilitate testing, add back after creating employer user type
 class InterviewViewSet(viewsets.ModelViewSet):
@@ -129,15 +144,15 @@ class InterviewViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
-        application = serializer.validated_data.get("application")
+        application = serializer.validated_data["application"]
 
-        if application.job.company != self.request.user.profile.company or self.request.user.profile.company is None:
+        company = getattr(self.request.user.profile, "company", None)
+        if company is None or application.job.company != company:
             raise PermissionDenied("You do not have permission to create an interview for this application.")
 
-        if application.status != "AP":
-            raise PermissionDenied("You can only add an interview for an application that has been submitted.")
-        application.status = "IN"
-        application.save(update_fields=["status"])
+        if application.status != Application.IN: # Only allow scheduling an interview if the application is in Interview stage
+            raise PermissionDenied("You can only schedule an interview once the application is in Interview stage.")
+
         serializer.save()
 
     def perform_update(self, serializer):
@@ -145,8 +160,8 @@ class InterviewViewSet(viewsets.ModelViewSet):
 
         if application.job.company != self.request.user.profile.company or self.request.user.profile.company is None:
             raise PermissionDenied("You do not have permission to update this interview.")
-        
-        if application.status != "IN":
+
+        if application.status != Application.IN: # Only allow updating an interview if the application is in Interview stage
             raise PermissionDenied("You can only update an interview for an application that is in interview stage.")
         serializer.save()
 
@@ -158,25 +173,24 @@ class InterviewViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to delete this interview.")
 
         instance.delete()
-        # If no more interviews exist for this application, revert status back to AP
-        if not Interview.objects.filter(application=application).exists():
-            application.status = "AP"
-            application.save(update_fields=["status"])
 
     @action(detail=True, methods=["post"])
     def offer(self, request, pk=None):
         interview = self.get_object()
         app = interview.application
-        if app.job.company != request.user.profile.company or request.user.profile.company is None:
-            raise PermissionDenied("No permission.")
-        app.transition_status(Application.OF)
-        return Response({"application_id": app.id, "status": app.status})
+        try:
+            app.transition_status(Application.OF)
+        except ValidationError as e:
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST)
+        
+        return Response({"id": app.id, "status": app.status})
     
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         interview = self.get_object()
         app = interview.application
-        if app.job.company != request.user.profile.company or request.user.profile.company is None:
-            raise PermissionDenied("No permission.")
-        app.transition_status(Application.RE)
-        return Response({"application_id": app.id, "status": app.status})
+        try:
+            app.transition_status(Application.RE)
+        except ValidationError as e:
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST)
+        return Response({"id": app.id, "status": app.status})
