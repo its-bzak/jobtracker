@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Interview, JobPosting, Application
+from .models import Interview, JobPosting, Application, JobAppAnswer, JobAppQuestion
 
 class JobPostingSerializer(serializers.ModelSerializer):
 
@@ -65,3 +65,29 @@ class InterviewSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("You cannot change the application of an existing interview.")
 
         return data
+    
+# Eventually add views validation
+class JobAppQuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = JobAppQuestion
+        fields = ['id', 'job', 'question_prompt', 'answer_type']
+        read_only_fields = ['id']
+
+    def validate(self, data):
+        request = self.context.get("request")
+        user = request.user
+        profile = user.profile
+
+        if self.instance: # Check to see if question already exists
+            job = self.instance.job
+            if "job" in data and data["job"] != self.instance.job:
+                raise serializers.ValidationError({"job": "You cannot change the job of an existing question."})
+        else: # Go to create question if no match
+            job = data.get("job")
+            if job is None: # Job not found (needed)
+                raise serializers.ValidationError({"job": "Cannot create a question without a job."})
+
+        if (profile.account_type != profile.ACCOUNT_EMPLOYER or profile.company is None or profile.company != job.company):
+            raise serializers.ValidationError("Only employers can create application questions for their company.")
+        return data # Return created question for given job
+
