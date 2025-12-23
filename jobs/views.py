@@ -2,11 +2,12 @@ from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework import status as http_status
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
-from .models import Profile, JobPosting, Application, Interview
-from .serializers import (JobPostingSerializer, ApplicationSerializer, InterviewSerializer)
+from .models import Profile, JobPosting, Application, Interview, JobAppQuestion, JobAppAnswer
+from .serializers import (JobPostingSerializer, ApplicationSerializer, InterviewSerializer, 
+                          JobAppAnswerSerializer, JobAppQuestionSerializer)
 from django.db import transaction
 
 # Create your views here.
@@ -194,3 +195,6 @@ class InterviewViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST)
         return Response({"id": app.id, "status": app.status})
+
+# To Do: Create JobAppQuestion Viewset
+# To Do: Create JobAppAnswer Viewset
