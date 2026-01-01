@@ -1,3 +1,4 @@
+from urllib import request
 from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework import status as http_status
@@ -23,6 +24,58 @@ class JobPostingViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only employers with a company can create job postings.")
         serializer.save(company=profile.company)
 
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def apply(self, request, pk=None):
+        job = self.get_object()
+        profile = request.user.profile
+
+        if profile.account_type != Profile.ACCOUNT_APPLICANT:
+            raise PermissionDenied("Only applicants can apply to job postings.")
+
+        # If any non-draft app exists for this job/user, block ability to apply again
+        already_submitted = Application.objects.filter(
+            applicant=request.user,
+            job=job
+        ).exclude(status=Application.DR).exists()
+
+        if already_submitted:
+            existing = Application.objects.filter(applicant=request.user, job=job).exclude(status=Application.DR).first()
+            return Response(
+                {"detail": "You have already submitted an application for this job.", "application_id": existing.id},
+                status=http_status.HTTP_409_CONFLICT
+            )
+
+        # Get existing or create new draft
+        application, created = Application.objects.get_or_create(
+            applicant=request.user,
+            job=job,
+            defaults={"status": Application.DR},
+        )
+
+        # Ensure answers exist for every question
+        for q in job.questions.all():
+            JobAppAnswer.objects.get_or_create(application=application, question=q)
+
+        # Build response
+        app_data = ApplicationSerializer(application, context={"request": request}).data
+
+        answers = JobAppAnswer.objects.filter(application=application).select_related("question")
+        answer_by_qid = {a.question_id: a for a in answers}
+
+        questions_payload = []
+        for q in job.questions.all():
+            ans = answer_by_qid.get(q.id)
+            questions_payload.append({
+                "question": JobAppQuestionSerializer(q, context={"request": request}).data,
+                "answer": JobAppAnswerSerializer(ans, context={"request": request}).data if ans else None,
+            })
+
+        return Response(
+            {"application": app_data, "questions": questions_payload},
+            status=http_status.HTTP_201_CREATED if created else http_status.HTTP_200_OK
+        )
+
 
 class ApplicationViewSet(viewsets.ModelViewSet):
     serializer_class = ApplicationSerializer
@@ -35,7 +88,10 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         return Application.objects.filter(applicant=self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(applicant=self.request.user)
+        application = serializer.save(applicant=self.request.user)
+        # Populate answers for all questions of the job on creation
+        for q in application.job.questions.all():
+            JobAppAnswer.objects.get_or_create(application=application, question=q)
 
     def perform_update(self, serializer):
         application = self.get_object()
@@ -67,10 +123,26 @@ class ApplicationViewSet(viewsets.ModelViewSet):
 
         # To Do: Add any additional submission logic here (e.g., send notification, etc.)
 
-        # To Do: Add required fields here (resume, cover letter, etc.)
+        # Validate required questions have answers
+        required_questions = application.job.questions.filter(required=True)
+        missing_questions = []
+        for q in required_questions:
+            ans = application.answers.filter(question=q).first()
+            if not ans or not ans.answer_value or not ans.answer_value.strip():
+                missing_questions.append({"id": q.id, "prompt": q.question_prompt})
 
-        application.status = "AP" # mark as applied
-        application.save(update_fields=["status"]) # only update status field
+        if missing_questions:
+            return Response({"detail": "Missing required questions.", "missing_questions": missing_questions}, status=http_status.HTTP_400_BAD_REQUEST)
+
+        # Validate required application-level fields (resume required)
+        if not application.resume:
+            return Response({"detail": "Resume is required to submit an application."}, status=http_status.HTTP_400_BAD_REQUEST)
+
+        # Transition status to Applied using transition method to validate allowed transitions
+        try:
+            application.transition_status(Application.AP)
+        except ValidationError as e:
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST)
 
         return Response(
             {"id": application.id, "status": application.status},
@@ -92,13 +164,12 @@ class ApplicationViewSet(viewsets.ModelViewSet):
                 status=http_status.HTTP_400_BAD_REQUEST
             )
 
-        application.status = "DR" # revert back to draft
-        application.save(update_fields=["status"]) # only update status field
-
-        return Response(
-            {"id": application.id, "status": application.status},
-            status=http_status.HTTP_200_OK
-        )
+        try:
+            application.transition_status(Application.DR) # try to mark as draft from applied
+        except ValidationError as e: # catch any validation errors
+            return Response({"detail": e.messages}, status=http_status.HTTP_400_BAD_REQUEST) # return error message and status code
+        
+        return Response({"id": application.id, "status": application.status}) # return updated application status
     
     @action(detail=True, methods=["post"])
     def offer(self, request, pk=None):  
@@ -115,6 +186,8 @@ class ApplicationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         app = self.get_object()
+        if app.job.company != request.user.profile.company or request.user.profile.company is None:
+            raise PermissionDenied("No permission.")
         try:
             app.transition_status(Application.RE) # try to mark as rejected from applied
         except ValidationError as e: # catch any validation errors
@@ -240,6 +313,9 @@ class JobAppAnswerViewSet(viewsets.ModelViewSet):
 
         if question.job != application.job:
             raise ValidationError("This question does not belong to the job posting for this application.")
+        
+        if application.status != Application.DR:
+            raise PermissionDenied("You can only answer questions for draft applications.")
 
         serializer.save()
 
@@ -247,9 +323,13 @@ class JobAppAnswerViewSet(viewsets.ModelViewSet):
         answer = self.get_object()
         if answer.application.applicant != self.request.user:
             raise PermissionDenied("You do not have permission to update this answer.")
+        if answer.application.status != Application.DR:
+            raise PermissionDenied("You can only update answers for draft applications.")
         serializer.save()
 
     def perform_destroy(self, instance):
         if instance.application.applicant != self.request.user:
             raise PermissionDenied("You do not have permission to delete this answer.")
+        if instance.application.status != Application.DR:
+            raise PermissionDenied("You can only delete answers for draft applications.")
         instance.delete()
