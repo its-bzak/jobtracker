@@ -11,8 +11,8 @@ class ApplicationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Application
-        fields = ['id', 'applicant', 'job', 'application_date', 'status']
-        read_only_fields = ['id', 'applicant', 'application_date', 'status']
+        fields = ['id', 'applicant', 'job', 'resume', 'cover_letter', 'notes', 'application_date', 'status']
+        read_only_fields = ['id', 'applicant', 'job', 'application_date', 'status']
 
     def validate(self, data):
         request = self.context.get("request")
