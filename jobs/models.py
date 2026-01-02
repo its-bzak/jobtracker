@@ -32,6 +32,13 @@ class Profile(models.Model):
     
 class Company(models.Model):
     name = models.CharField(max_length=100)
+    location = models.CharField(max_length=100, blank=True, null=True)
+    company_size = models.CharField(max_length=20, choices=[
+        ('SM', 'Small Business (1-50)'),
+        ('MD', 'Medium Company (51-500)'),
+        ('LG', 'Large Enterprise (501+)'),
+    ], blank=True, null=True)
+    industry = models.CharField(max_length=100, blank=True, null=True)
     description = models.TextField(max_length=1000, blank=True, null=True)
     website = models.URLField(blank=True, null=True)
 
