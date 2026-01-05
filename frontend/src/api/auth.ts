@@ -23,3 +23,11 @@ export function logout() {
 export function isLoggedIn(): boolean {
   return !!tokenStorage.getAccess();
 }
+
+export async function register(username: string, password: string, email: string) {
+  await api.post("/api/auth/register/", {
+    username,
+    password,
+    email,
+  });
+}
