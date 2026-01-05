@@ -10,7 +10,7 @@ export default function Login() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     await login(username, password);
-    nav("/dashboard");
+    nav("/jobs");
   }
 
   return (
